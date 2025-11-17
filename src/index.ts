@@ -455,5 +455,26 @@ export async function verifyAuthSignature(
   })
 }
 
-// All exports are already declared inline with 'export' keyword above
-// No need for duplicate export block
+// ============================================================================
+// SERVICE AUTH TOKENS (SAT)
+// ============================================================================
+
+// Re-export all SAT functionality
+export {
+  generateToken,
+  verifyToken as verifySATToken,
+  encodeToken,
+  decodeToken,
+  ServiceKeyRegistry,
+  type ServiceAuthToken,
+  type ServiceKey
+} from './service-auth'
+
+// Re-export middleware (only if hono is available)
+export {
+  serviceAuth,
+  getAuthContext,
+  requireService,
+  requireNode,
+  type ServiceAuthContext
+} from './middleware'
