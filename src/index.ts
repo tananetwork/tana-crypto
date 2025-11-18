@@ -456,6 +456,64 @@ export async function verifyAuthSignature(
 }
 
 // ============================================================================
+// KEYPAIR GENERATION
+// ============================================================================
+
+/**
+ * Generate a new Ed25519 keypair
+ *
+ * @returns Object with publicKey and privateKey as hex strings with prefixes
+ */
+export async function generateKeypair(): Promise<{ publicKey: string; privateKey: string }> {
+  // Generate a random 32-byte private key using Web Crypto API
+  // This is more portable than @noble/ed25519's utils.randomPrivateKey
+  const privateKeyBytes = new Uint8Array(32)
+
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    // Browser or Bun
+    crypto.getRandomValues(privateKeyBytes)
+  } else {
+    // Node.js fallback
+    const { randomBytes } = await import('crypto')
+    const buffer = randomBytes(32)
+    privateKeyBytes.set(buffer)
+  }
+
+  // Derive the public key from the private key
+  const publicKeyBytes = await ed.getPublicKeyAsync(privateKeyBytes)
+
+  // Convert to hex strings with prefixes
+  const privateKey = addKeyPrefix(bytesToHex(privateKeyBytes))
+  const publicKey = addKeyPrefix(bytesToHex(publicKeyBytes))
+
+  return {
+    publicKey,
+    privateKey
+  }
+}
+
+/**
+ * Generate an Ed25519 signature for a message
+ *
+ * @param message - The message to sign
+ * @param privateKeyHex - Ed25519 private key (with or without prefix)
+ * @returns Ed25519 signature as hex string with prefix
+ */
+export async function signMessage(message: string, privateKeyHex: string): Promise<string> {
+  // Strip prefix and convert to bytes
+  const privateKeyBytes = hexToBytes(privateKeyHex)
+
+  // Hash the message
+  const messageHash = sha256(message)
+
+  // Sign the message hash
+  const signatureBytes = await ed.signAsync(messageHash, privateKeyBytes)
+
+  // Return signature with prefix
+  return addSignaturePrefix(bytesToHex(signatureBytes))
+}
+
+// ============================================================================
 // SERVICE AUTH TOKENS (SAT)
 // ============================================================================
 
