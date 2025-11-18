@@ -1,6 +1,6 @@
 {
   "name": "@tananetwork/crypto",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Shared cryptography utilities for Tana blockchain - Ed25519 signing, verification, and service authentication",
   "main": "src/index.ts",
