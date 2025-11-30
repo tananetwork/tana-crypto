@@ -15,6 +15,12 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run tests
+        run: bun test
+
       - name: Update package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |

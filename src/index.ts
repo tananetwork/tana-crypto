@@ -800,22 +800,29 @@ export async function verifyAuthSignature(
 /**
  * Generate a new Ed25519 keypair
  *
+ * Uses Web Crypto API (crypto.getRandomValues) which is available in:
+ * - All modern browsers
+ * - Node.js 15+ (global crypto)
+ * - Bun, Deno
+ * - React Native (with react-native-get-random-values polyfill)
+ *
  * @returns Object with publicKey and privateKey as hex strings with prefixes
+ * @throws Error if crypto.getRandomValues is not available
  */
 export async function generateKeypair(): Promise<{ publicKey: string; privateKey: string }> {
   // Generate a random 32-byte private key using Web Crypto API
-  // This is more portable than @noble/ed25519's utils.randomPrivateKey
   const privateKeyBytes = new Uint8Array(32)
 
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    // Browser or Bun
-    crypto.getRandomValues(privateKeyBytes)
-  } else {
-    // Node.js fallback
-    const { randomBytes } = await import('crypto')
-    const buffer = randomBytes(32)
-    privateKeyBytes.set(buffer)
+  // Use Web Crypto API - available in all modern environments
+  // React Native requires react-native-get-random-values polyfill
+  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
+    throw new Error(
+      'crypto.getRandomValues is not available. ' +
+      'In React Native, ensure react-native-get-random-values is imported before this module.'
+    )
   }
+
+  crypto.getRandomValues(privateKeyBytes)
 
   // Derive the public key from the private key
   const publicKeyBytes = await ed.getPublicKeyAsync(privateKeyBytes)
