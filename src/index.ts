@@ -14,7 +14,11 @@
  */
 
 import * as ed from '@noble/ed25519'
-import { createHash } from 'crypto'
+import { sha256 as sha256Noble } from '@noble/hashes/sha2.js'
+import bs58 from 'bs58'
+
+// Note: Using @noble/hashes instead of Node.js crypto for cross-platform compatibility
+// This allows the package to work in both Node.js and React Native environments
 
 // ============================================================================
 // CONSTANTS
@@ -30,9 +34,60 @@ import { createHash } from 'crypto'
 export const PREFIX_KEY = 'ed25519_' as const
 export const PREFIX_SIGNATURE = 'ed25519_sig_' as const
 
+/**
+ * Address version bytes for network identification
+ *
+ * These version bytes are prepended to the address payload before Base58 encoding.
+ * Different version bytes produce different leading characters in the final address:
+ * - 0x41 (mainnet) produces addresses starting with various chars (good visual variety)
+ * - 0x6F (testnet) produces addresses with different leading chars
+ */
+export const ADDRESS_VERSION_MAINNET = 0x41 as const
+export const ADDRESS_VERSION_TESTNET = 0x6f as const
+
+/**
+ * Address hash size in bytes (8 bytes = 64 bits)
+ *
+ * This determines the collision resistance:
+ * - 8 bytes = 2^64 address space
+ * - Birthday attack threshold: ~2^32 = 4 billion addresses
+ * - Safe for expected Tana user base
+ */
+export const ADDRESS_HASH_BYTES = 8 as const
+
+/**
+ * Checksum size in bytes
+ *
+ * 4-byte checksum catches typos with 1 in ~4 billion probability of missing an error.
+ * Uses double SHA-256 (same as Bitcoin).
+ */
+export const ADDRESS_CHECKSUM_BYTES = 4 as const
+
 // ============================================================================
 // TYPE DEFINITIONS
 // ============================================================================
+
+export type NetworkType = 'mainnet' | 'testnet'
+
+export interface AddressInfo {
+  /** The address string (Base58Check encoded) */
+  address: string
+  /** The truncated hash of the public key (hex) */
+  hash: string
+  /** Network type */
+  network: NetworkType
+}
+
+export interface AddressValidationResult {
+  /** Whether the address is valid */
+  valid: boolean
+  /** Network type if valid */
+  network?: NetworkType
+  /** Error message if invalid */
+  error?: string
+  /** The decoded hash if valid (hex) */
+  hash?: string
+}
 
 export interface SignatureVerificationResult {
   valid: boolean
@@ -161,11 +216,16 @@ export function bytesToHex(bytes: Uint8Array): string {
 /**
  * Hash a string or buffer with SHA-256
  *
+ * Uses @noble/hashes for cross-platform compatibility (Node.js + React Native)
+ *
  * @param data - String or buffer to hash
  * @returns SHA-256 hash as Buffer
  */
-export function sha256(data: string | Buffer): Buffer {
-  return createHash('sha256').update(data).digest()
+export function sha256(data: string | Buffer | Uint8Array): Buffer {
+  if (typeof data === 'string') {
+    return Buffer.from(sha256Noble(new TextEncoder().encode(data)))
+  }
+  return Buffer.from(sha256Noble(data))
 }
 
 /**
@@ -176,6 +236,284 @@ export function sha256(data: string | Buffer): Buffer {
  */
 export function sha256Hex(data: string): string {
   return sha256(data).toString('hex')
+}
+
+// ============================================================================
+// ADDRESS ENCODING/DECODING
+// ============================================================================
+
+/**
+ * Convert a public key to a Tana address
+ *
+ * The address format is:
+ * 1. SHA-256 hash of public key (32 bytes)
+ * 2. Truncate to first 8 bytes
+ * 3. Prepend version byte (0x41 mainnet, 0x6F testnet)
+ * 4. Append 4-byte checksum (double SHA-256)
+ * 5. Base58 encode
+ *
+ * Result: 18-character address with good visual variety
+ *
+ * @param pubkey - Ed25519 public key (with or without 'ed25519_' prefix)
+ * @param network - Network type ('mainnet' or 'testnet')
+ * @returns AddressInfo with address string, hash, and network
+ *
+ * @example
+ * const keypair = await generateKeypair()
+ * const info = pubkeyToAddress(keypair.publicKey)
+ * console.log(info.address) // "6RZ411u7FhSG2DkcKt"
+ */
+export function pubkeyToAddress(
+  pubkey: string,
+  network: NetworkType = 'mainnet'
+): AddressInfo {
+  // Strip prefix and convert to bytes
+  const pubkeyBytes = hexToBytes(pubkey)
+
+  if (pubkeyBytes.length !== 32) {
+    throw new Error(
+      `Invalid public key length: expected 32 bytes, got ${pubkeyBytes.length} bytes`
+    )
+  }
+
+  // Hash the public key and take first 8 bytes
+  const fullHash = sha256(Buffer.from(pubkeyBytes))
+  const truncatedHash = fullHash.slice(0, ADDRESS_HASH_BYTES)
+
+  // Get version byte based on network
+  const version =
+    network === 'mainnet' ? ADDRESS_VERSION_MAINNET : ADDRESS_VERSION_TESTNET
+
+  // Create versioned payload: [version byte] + [8-byte hash]
+  const versionedPayload = Buffer.concat([
+    Buffer.from([version]),
+    truncatedHash
+  ])
+
+  // Calculate checksum: first 4 bytes of double SHA-256
+  const checksum = sha256(sha256(versionedPayload)).slice(
+    0,
+    ADDRESS_CHECKSUM_BYTES
+  )
+
+  // Encode as Base58: [version] + [hash] + [checksum]
+  const address = bs58.encode(Buffer.concat([versionedPayload, checksum]))
+
+  return {
+    address,
+    hash: truncatedHash.toString('hex'),
+    network
+  }
+}
+
+/**
+ * Validate a Tana address and extract its components
+ *
+ * Checks:
+ * 1. Valid Base58 encoding
+ * 2. Correct length (13 bytes: 1 version + 8 hash + 4 checksum)
+ * 3. Known version byte
+ * 4. Valid checksum
+ *
+ * @param address - The address string to validate
+ * @returns Validation result with network type and hash if valid
+ *
+ * @example
+ * const result = validateAddress("6RZ411u7FhSG2DkcKt")
+ * if (result.valid) {
+ *   console.log(result.network) // "mainnet"
+ *   console.log(result.hash)    // "abc123..."
+ * }
+ */
+export function validateAddress(address: string): AddressValidationResult {
+  try {
+    // Decode from Base58
+    let bytes: Buffer
+    try {
+      bytes = Buffer.from(bs58.decode(address))
+    } catch {
+      return { valid: false, error: 'Invalid Base58 encoding' }
+    }
+
+    // Check length: 1 (version) + 8 (hash) + 4 (checksum) = 13 bytes
+    const expectedLength = 1 + ADDRESS_HASH_BYTES + ADDRESS_CHECKSUM_BYTES
+    if (bytes.length !== expectedLength) {
+      return {
+        valid: false,
+        error: `Invalid address length: expected ${expectedLength} bytes, got ${bytes.length} bytes`
+      }
+    }
+
+    // Extract components
+    const version = bytes[0]
+    const hash = bytes.slice(1, 1 + ADDRESS_HASH_BYTES)
+    const checksum = bytes.slice(1 + ADDRESS_HASH_BYTES)
+
+    // Verify version byte
+    let network: NetworkType
+    if (version === ADDRESS_VERSION_MAINNET) {
+      network = 'mainnet'
+    } else if (version === ADDRESS_VERSION_TESTNET) {
+      network = 'testnet'
+    } else {
+      return {
+        valid: false,
+        error: `Unknown version byte: 0x${version.toString(16)}`
+      }
+    }
+
+    // Verify checksum
+    const versionedPayload = bytes.slice(0, 1 + ADDRESS_HASH_BYTES)
+    const expectedChecksum = sha256(sha256(versionedPayload)).slice(
+      0,
+      ADDRESS_CHECKSUM_BYTES
+    )
+
+    if (!checksum.equals(expectedChecksum)) {
+      return { valid: false, error: 'Invalid checksum' }
+    }
+
+    return {
+      valid: true,
+      network,
+      hash: hash.toString('hex')
+    }
+  } catch (error: any) {
+    return {
+      valid: false,
+      error: `Unexpected error: ${error.message}`
+    }
+  }
+}
+
+/**
+ * Check if a public key matches a given address
+ *
+ * This is used to verify that a claimed public key corresponds to an address.
+ * For example, when a user signs a transaction, they include their public key.
+ * The network verifies that hash(publicKey) == address.
+ *
+ * @param pubkey - Ed25519 public key (with or without prefix)
+ * @param address - Tana address to verify against
+ * @returns True if the pubkey hashes to the given address
+ *
+ * @example
+ * // When processing a transaction
+ * if (!verifyPubkeyMatchesAddress(tx.from, senderAddress)) {
+ *   throw new Error("Public key doesn't match sender address")
+ * }
+ */
+export function verifyPubkeyMatchesAddress(
+  pubkey: string,
+  address: string
+): boolean {
+  try {
+    // Validate the address first
+    const validation = validateAddress(address)
+    if (!validation.valid) {
+      return false
+    }
+
+    // Generate address from pubkey and compare
+    const derived = pubkeyToAddress(pubkey, validation.network)
+    return derived.address === address
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Check if a string is a valid Tana address format
+ *
+ * Quick check without full validation - just checks structure.
+ * Use validateAddress() for complete validation with checksum verification.
+ *
+ * @param str - String to check
+ * @returns True if the string looks like a Tana address
+ */
+export function isAddress(str: string): boolean {
+  // Quick structural check: should be ~18 chars of Base58
+  if (typeof str !== 'string' || str.length < 15 || str.length > 20) {
+    return false
+  }
+
+  // Check for valid Base58 characters only
+  const base58Chars = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/
+  return base58Chars.test(str)
+}
+
+/**
+ * Check if a string is a public key (not an address)
+ *
+ * Helps distinguish between pubkeys and addresses when handling
+ * data from cookies, JWTs, or API responses.
+ *
+ * @param str - String to check
+ * @returns True if the string looks like an Ed25519 public key
+ */
+export function isPublicKey(str: string): boolean {
+  if (typeof str !== 'string') return false
+
+  // Check for ed25519_ prefix
+  if (str.startsWith(PREFIX_KEY)) {
+    const hex = str.substring(PREFIX_KEY.length)
+    return hex.length === 64 && /^[0-9a-fA-F]+$/.test(hex)
+  }
+
+  // Raw 64-char hex
+  return str.length === 64 && /^[0-9a-fA-F]+$/.test(str)
+}
+
+/**
+ * Convert a public key or address to its address form
+ *
+ * Handles both pubkeys and addresses gracefully - if already an address,
+ * returns it as-is. If a pubkey, converts to address.
+ *
+ * Useful when handling data from cookies/JWTs where you don't know
+ * if you have an address or pubkey.
+ *
+ * @param pubkeyOrAddress - Either a public key or address
+ * @param network - Network type (only used if input is pubkey)
+ * @returns The address string
+ *
+ * @example
+ * // From JWT/cookie - might be either format
+ * const displayAddress = toAddress(userIdentifier)
+ */
+export function toAddress(
+  pubkeyOrAddress: string,
+  network: NetworkType = 'mainnet'
+): string {
+  // If it's already a valid address, return it
+  if (isAddress(pubkeyOrAddress)) {
+    const validation = validateAddress(pubkeyOrAddress)
+    if (validation.valid) {
+      return pubkeyOrAddress
+    }
+  }
+
+  // Otherwise, treat as pubkey and convert
+  return pubkeyToAddress(pubkeyOrAddress, network).address
+}
+
+/**
+ * Format an address or pubkey for display
+ *
+ * Always returns an address format (18 chars).
+ * If input is a pubkey, converts it.
+ * If input is an address, validates and returns it.
+ *
+ * @param pubkeyOrAddress - Public key or address
+ * @param network - Network type (defaults to mainnet)
+ * @returns Formatted address string
+ * @throws Error if input is invalid
+ */
+export function formatForDisplay(
+  pubkeyOrAddress: string,
+  network: NetworkType = 'mainnet'
+): string {
+  return toAddress(pubkeyOrAddress, network)
 }
 
 // ============================================================================
@@ -517,7 +855,7 @@ export async function signMessage(message: string, privateKeyHex: string): Promi
 // SERVICE AUTH TOKENS (SAT)
 // ============================================================================
 
-// Re-export all SAT functionality
+// Re-export SAT functionality (pure functions - no framework dependency)
 export {
   generateToken,
   verifyToken as verifySATToken,
@@ -528,11 +866,7 @@ export {
   type ServiceKey
 } from './service-auth'
 
-// Re-export middleware (only if hono is available)
-export {
-  serviceAuth,
-  getAuthContext,
-  requireService,
-  requireNode,
-  type ServiceAuthContext
-} from './middleware'
+// Note: Hono middleware (serviceAuth, requireService, etc.) was intentionally
+// removed from this package. The crypto package should contain only pure
+// functions without framework dependencies. Services that need auth middleware
+// should implement it using the SAT verification functions exported above.

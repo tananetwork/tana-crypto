@@ -1,8 +1,8 @@
 {
   "name": "@tananetwork/crypto",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Shared cryptography utilities for Tana blockchain - Ed25519 signing, verification, and service authentication",
+  "description": "Shared cryptography utilities for Tana blockchain - Ed25519 signing, verification, address encoding, and service authentication",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts"
@@ -11,14 +11,13 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@noble/ed25519": "^2.1.0"
+    "@noble/ed25519": "^2.1.0",
+    "@noble/hashes": "^2.0.1",
+    "bs58": "^6.0.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^20.10.0"
-  },
-  "peerDependencies": {
-    "hono": "^4.0.0"
   },
   "keywords": [
     "ed25519",
@@ -26,6 +25,8 @@
     "signature",
     "verification",
     "blockchain",
+    "address",
+    "base58",
     "service-auth",
     "jwt",
     "authentication"
