@@ -173,6 +173,8 @@ export function addKeyPrefix(hex: string): string {
  * Convert hex string to Uint8Array
  * Automatically strips any prefixes
  *
+ * Uses pure JavaScript for React Native compatibility (no Buffer dependency)
+ *
  * @param hex - Hex string to convert
  * @returns Uint8Array of bytes
  * @throws Error if hex string is invalid
@@ -195,18 +197,61 @@ export function hexToBytes(hex: string): Uint8Array {
     )
   }
 
-  return Buffer.from(clean, 'hex')
+  // Pure JS hex decoding - works in React Native
+  const bytes = new Uint8Array(clean.length / 2)
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.substring(i * 2, i * 2 + 2), 16)
+  }
+  return bytes
 }
 
 /**
  * Convert Uint8Array to hex string
  * Does NOT add any prefix
  *
+ * Uses pure JavaScript for React Native compatibility (no Buffer dependency)
+ *
  * @param bytes - Bytes to convert
  * @returns Hex string without prefix
  */
 export function bytesToHex(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString('hex')
+  return Array.from(bytes)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
+/**
+ * Concatenate multiple Uint8Arrays into one
+ *
+ * Pure JavaScript replacement for Buffer.concat()
+ *
+ * @param arrays - Arrays to concatenate
+ * @returns Combined Uint8Array
+ */
+function concatBytes(...arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0)
+  const result = new Uint8Array(totalLength)
+  let offset = 0
+  for (const arr of arrays) {
+    result.set(arr, offset)
+    offset += arr.length
+  }
+  return result
+}
+
+/**
+ * Compare two Uint8Arrays for equality
+ *
+ * @param a - First array
+ * @param b - Second array
+ * @returns True if arrays are equal
+ */
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
 
 // ============================================================================
@@ -214,18 +259,18 @@ export function bytesToHex(bytes: Uint8Array): string {
 // ============================================================================
 
 /**
- * Hash a string or buffer with SHA-256
+ * Hash a string or Uint8Array with SHA-256
  *
  * Uses @noble/hashes for cross-platform compatibility (Node.js + React Native)
  *
- * @param data - String or buffer to hash
- * @returns SHA-256 hash as Buffer
+ * @param data - String or Uint8Array to hash
+ * @returns SHA-256 hash as Uint8Array
  */
-export function sha256(data: string | Buffer | Uint8Array): Buffer {
+export function sha256(data: string | Uint8Array): Uint8Array {
   if (typeof data === 'string') {
-    return Buffer.from(sha256Noble(new TextEncoder().encode(data)))
+    return sha256Noble(new TextEncoder().encode(data))
   }
-  return Buffer.from(sha256Noble(data))
+  return sha256Noble(data)
 }
 
 /**
@@ -235,7 +280,7 @@ export function sha256(data: string | Buffer | Uint8Array): Buffer {
  * @returns SHA-256 hash as hex string (no prefix)
  */
 export function sha256Hex(data: string): string {
-  return sha256(data).toString('hex')
+  return bytesToHex(sha256(data))
 }
 
 // ============================================================================
@@ -277,7 +322,7 @@ export function pubkeyToAddress(
   }
 
   // Hash the public key and take first 8 bytes
-  const fullHash = sha256(Buffer.from(pubkeyBytes))
+  const fullHash = sha256(pubkeyBytes)
   const truncatedHash = fullHash.slice(0, ADDRESS_HASH_BYTES)
 
   // Get version byte based on network
@@ -285,10 +330,10 @@ export function pubkeyToAddress(
     network === 'mainnet' ? ADDRESS_VERSION_MAINNET : ADDRESS_VERSION_TESTNET
 
   // Create versioned payload: [version byte] + [8-byte hash]
-  const versionedPayload = Buffer.concat([
-    Buffer.from([version]),
+  const versionedPayload = concatBytes(
+    new Uint8Array([version]),
     truncatedHash
-  ])
+  )
 
   // Calculate checksum: first 4 bytes of double SHA-256
   const checksum = sha256(sha256(versionedPayload)).slice(
@@ -297,11 +342,11 @@ export function pubkeyToAddress(
   )
 
   // Encode as Base58: [version] + [hash] + [checksum]
-  const address = bs58.encode(Buffer.concat([versionedPayload, checksum]))
+  const address = bs58.encode(concatBytes(versionedPayload, checksum))
 
   return {
     address,
-    hash: truncatedHash.toString('hex'),
+    hash: bytesToHex(truncatedHash),
     network
   }
 }
@@ -328,9 +373,9 @@ export function pubkeyToAddress(
 export function validateAddress(address: string): AddressValidationResult {
   try {
     // Decode from Base58
-    let bytes: Buffer
+    let bytes: Uint8Array
     try {
-      bytes = Buffer.from(bs58.decode(address))
+      bytes = bs58.decode(address)
     } catch {
       return { valid: false, error: 'Invalid Base58 encoding' }
     }
@@ -369,14 +414,14 @@ export function validateAddress(address: string): AddressValidationResult {
       ADDRESS_CHECKSUM_BYTES
     )
 
-    if (!checksum.equals(expectedChecksum)) {
+    if (!bytesEqual(checksum, expectedChecksum)) {
       return { valid: false, error: 'Invalid checksum' }
     }
 
     return {
       valid: true,
       network,
-      hash: hash.toString('hex')
+      hash: bytesToHex(hash)
     }
   } catch (error: any) {
     return {
@@ -620,7 +665,7 @@ export async function verifySignature(
 
     // Hash the message
     const messageHash = sha256(message)
-    const messageHashHex = messageHash.toString('hex')
+    const messageHashHex = bytesToHex(messageHash)
 
     if (debug) {
       console.log(`[crypto:${label}] Message hash: ${messageHashHex.substring(0, 16)}...`)

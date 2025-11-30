@@ -207,13 +207,13 @@ describe('sha256', () => {
   test('matches known SHA-256 value', () => {
     // SHA-256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
     const hash = sha256('hello')
-    expect(hash.toString('hex')).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824')
+    expect(bytesToHex(hash)).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824')
   })
 
   test('handles empty string', () => {
     // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     const hash = sha256('')
-    expect(hash.toString('hex')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+    expect(bytesToHex(hash)).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
   })
 })
 
@@ -225,9 +225,9 @@ describe('sha256Hex', () => {
   })
 
   test('matches sha256 output as hex', () => {
-    const bufferHash = sha256('test').toString('hex')
+    const bytesHash = bytesToHex(sha256('test'))
     const hexHash = sha256Hex('test')
-    expect(hexHash).toBe(bufferHash)
+    expect(hexHash).toBe(bytesHash)
   })
 })
 
