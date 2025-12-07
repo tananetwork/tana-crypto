@@ -14,11 +14,16 @@
  */
 
 import * as ed from '@noble/ed25519'
-import { sha256 as sha256Noble } from '@noble/hashes/sha2.js'
+import { sha256 as sha256Noble, sha512 } from '@noble/hashes/sha2.js'
 import bs58 from 'bs58'
 
 // Note: Using @noble/hashes instead of Node.js crypto for cross-platform compatibility
 // This allows the package to work in both Node.js and React Native environments
+
+// Configure @noble/ed25519 to use synchronous sha512 from @noble/hashes
+// This avoids using crypto.subtle which can cause event loop issues in Bun
+// after HTTP fetch operations (hangs on signAsync after fetch + json)
+ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m))
 
 // ============================================================================
 // CONSTANTS
@@ -889,15 +894,16 @@ export async function generateKeypair(): Promise<{ publicKey: string; privateKey
  * @param privateKeyHex - Ed25519 private key (with or without prefix)
  * @returns Ed25519 signature as hex string with prefix
  */
-export async function signMessage(message: string, privateKeyHex: string): Promise<string> {
+export function signMessage(message: string, privateKeyHex: string): string {
   // Strip prefix and convert to bytes
   const privateKeyBytes = hexToBytes(privateKeyHex)
 
   // Hash the message
   const messageHash = sha256(message)
 
-  // Sign the message hash
-  const signatureBytes = await ed.signAsync(messageHash, privateKeyBytes)
+  // Sign the message hash synchronously
+  // Using ed.sign() instead of ed.signAsync() to avoid crypto.subtle event loop issues in Bun
+  const signatureBytes = ed.sign(messageHash, privateKeyBytes)
 
   // Return signature with prefix
   return addSignaturePrefix(bytesToHex(signatureBytes))

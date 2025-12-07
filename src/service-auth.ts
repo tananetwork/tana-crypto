@@ -55,13 +55,13 @@ function createTokenMessage(token: Omit<ServiceAuthToken, 'signature'>): string 
  * @param ttl - Time-to-live in milliseconds (default: 1 hour)
  * @returns Service auth token with signature
  */
-export async function generateToken(
+export function generateToken(
   serviceId: ServiceAuthToken['serviceId'],
   nodeId: string,
   privateKey: string,
   payload?: Record<string, any>,
   ttl: number = 3600000 // 1 hour
-): Promise<ServiceAuthToken> {
+): ServiceAuthToken {
   const timestamp = Date.now()
   const expiresAt = timestamp + ttl
 
@@ -79,7 +79,8 @@ export async function generateToken(
 
   const cleanKey = stripPrefix(privateKey)
   const privateKeyBytes = Buffer.from(cleanKey, 'hex')
-  const signatureBytes = await ed.signAsync(messageHash, privateKeyBytes)
+  // Use synchronous ed.sign() - sha512Sync configured in index.ts
+  const signatureBytes = ed.sign(messageHash, privateKeyBytes)
 
   return {
     ...tokenData,
